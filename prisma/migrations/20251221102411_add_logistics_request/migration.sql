@@ -1,0 +1,2 @@
+-- CreateEnum
+CREATE TYPE "LogisticsRequestStatus" AS ENUM ('PENDING', 'ASSIGNED', 'IN_TRANSIT', 'COMPLETED', 'CANCELLED');

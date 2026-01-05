@@ -1,0 +1,502 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String         @unique
+  passwordHash  String
+  name          String?
+  role          UserRole       @default(USER)
+  emailVerified Boolean        @default(false)
+  isPartner     Boolean        @default(false)
+  orders        Order[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  deliveries    Delivery[]
+  wishlist      WishlistItem[]
+
+  // New relations for verification, password reset, partnership
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens     PasswordResetToken[]
+  partnershipApplication  PartnershipApplication?
+  investmentInterests     InvestmentInterest[]
+}
+
+model Vendor {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  passwordHash String
+  businessName String
+  contactName  String?
+  phone        String?
+  status       VendorStatus @default(PENDING)
+  isActive     Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  products     Product[]
+  orders       Order[]
+  deliveries   Delivery[]
+
+  // Barter system relations
+  initiatedBarterOffers BarterOffer[] @relation("InitiatedOffers")
+  receivedBarterOffers  BarterOffer[] @relation("ReceivedOffers")
+}
+
+model Product {
+  id       String @id @default(cuid())
+  vendorId String
+  vendor   Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  shortDesc   String?
+  benefits    String[] @default([])
+  relatedIds  String[] @default([])
+
+  // ✅ NEW SOURCE OF TRUTH
+  priceUsdCents Int
+
+  category        String?
+  imageUrl        String?
+  isAvailable     Boolean       @default(true)
+  isDeleted       Boolean       @default(false)
+  status          ProductStatus @default(DRAFT)
+  earlyAccessOnly Boolean       @default(false)
+
+  orderItems    OrderItem[]
+  wishlistItems WishlistItem[]
+  barterItems   BarterItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Order {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  vendorId String
+  vendor   Vendor @relation(fields: [vendorId], references: [id])
+
+  items    OrderItem[]
+  payments Payment[] // 👈 add this
+
+  // Payment & Shipping
+  paymentMethod  String @default("paypal")   // "paypal" | "paystack"
+  shippingType   String @default("standard") // "standard" | "express"
+  shippingFee    Int    @default(0)          // In smallest unit (cents for USD, kobo for NGN)
+  subtotalAmount Int    @default(0)          // Items total before shipping
+
+  totalAmountKobo Int                        // Total = subtotal + shippingFee (in cents or kobo)
+  currency        String        @default("NGN")
+  status          OrderStatus   @default(PENDING)
+  paymentStatus   PaymentStatus @default(PENDING)
+  delivery        Delivery?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model OrderItem {
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  quantity      Int
+  unitPriceKobo Int
+  subtotalKobo  Int
+}
+
+model Payment {
+  id      String @id @default(cuid())
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  provider    String // "paystack"
+  providerRef String? // paystack reference
+  amountKobo  Int
+  currency    String        @default("NGN")
+  status      PaymentStatus @default(PENDING)
+
+  rawResponse Json? // store Paystack init response / webhook payload
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Delivery {
+  id       String @id @default(cuid())
+  orderId  String @unique
+  vendorId String
+  userId   String
+
+  pickupLocation  String
+  dropoffLocation String
+  riderName       String?
+  riderPhone      String?
+  notes           String?
+
+  status DeliveryStatus @default(PENDING)
+
+  trackingCode String @unique // ✅ no default — we generate FCQ-TRK-XXXXXX in code
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order  Order  @relation(fields: [orderId], references: [id])
+  vendor Vendor @relation(fields: [vendorId], references: [id])
+  user   User   @relation(fields: [userId], references: [id])
+
+  events DeliveryEvent[]
+}
+
+model DeliveryEvent {
+  id         String @id @default(cuid())
+  deliveryId String
+
+  status   DeliveryStatus // ✅ REQUIRED (routes use it)
+  title    String
+  note     String?
+  location String?
+
+  createdAt DateTime @default(now())
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId])
+}
+
+model LogisticsRequest {
+  id           String @id @default(cuid())
+  trackingCode String @unique
+
+  // Optional: if this request is tied to an existing FoodCheQ order
+  orderId String?
+
+  fullName String
+  phone    String
+  email    String
+
+  pickupLocation  String
+  dropoffLocation String
+
+  pickupDate  DateTime?
+  packageType String
+  notes       String?
+
+  status DeliveryStatus @default(PENDING)
+
+  riderName       String?
+  riderPhone      String?
+  currentLocation String?
+  eta             DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events LogisticsRequestEvent[]
+}
+
+model LogisticsRequestEvent {
+  id        String @id @default(cuid())
+  requestId String
+
+  status   DeliveryStatus
+  title    String
+  note     String?
+  location String?
+
+  createdAt DateTime @default(now())
+
+  request LogisticsRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+}
+
+model AppSetting {
+  key       String   @id
+  value     Decimal // e.g. 1600.00
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum OrderStatus {
+  PENDING // created, waiting for vendor/payment
+  ACCEPTED // vendor accepted
+  REJECTED // vendor rejected
+  PREPARING // being prepared
+  READY // ready for pickup/dispatch
+  COMPLETED // delivered/finished
+  CANCELLED // cancelled by user/vendor/admin
+}
+
+model WishlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@index([userId])
+  @@index([productId])
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum VendorStatus {
+  PENDING
+  APPROVED
+  SUSPENDED
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  INACTIVE
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum DeliveryStatus {
+  PENDING
+  ASSIGNED
+  IN_TRANSIT
+  COMPLETED
+  CANCELLED
+}
+
+enum LogisticsRequestStatus {
+  PENDING
+  ASSIGNED
+  IN_TRANSIT
+  COMPLETED
+  CANCELLED
+}
+
+// ============================================
+// EMAIL VERIFICATION
+// ============================================
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+}
+
+// ============================================
+// PASSWORD RESET
+// ============================================
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([token])
+}
+
+// ============================================
+// PARTNERSHIP PROGRAM
+// ============================================
+
+model PartnershipApplication {
+  id          String                       @id @default(cuid())
+  userId      String                       @unique
+  user        User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  location    String
+  status      PartnershipApplicationStatus @default(PENDING)
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  reviewNotes String?
+  createdAt   DateTime                     @default(now())
+  updatedAt   DateTime                     @updatedAt
+}
+
+enum PartnershipApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  NEEDS_INFO
+}
+
+model InvestmentOpportunity {
+  id          String               @id @default(cuid())
+  title       String
+  description String
+  isActive    Boolean              @default(true)
+  interests   InvestmentInterest[]
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+}
+
+model InvestmentInterest {
+  id            String                @id @default(cuid())
+  opportunityId String
+  opportunity   InvestmentOpportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime              @default(now())
+
+  @@unique([opportunityId, userId])
+  @@index([opportunityId])
+  @@index([userId])
+}
+
+// ============================================
+// VENDOR BARTER SYSTEM
+// ============================================
+
+model BarterOffer {
+  id                String   @id @default(cuid())
+  initiatorVendorId String
+  initiatorVendor   Vendor   @relation("InitiatedOffers", fields: [initiatorVendorId], references: [id])
+  recipientVendorId String
+  recipientVendor   Vendor   @relation("ReceivedOffers", fields: [recipientVendorId], references: [id])
+
+  status BarterStatus @default(DRAFT)
+
+  // Items in the offer
+  items BarterItem[]
+
+  // Cash gap to balance the trade (in USD cents)
+  cashGapCents     Int               @default(0)
+  cashGapDirection CashGapDirection?
+
+  message          String?
+  counterOfMessage String?
+
+  // For counter-offers, link to parent
+  parentOfferId String?
+  parentOffer   BarterOffer?  @relation("CounterOffers", fields: [parentOfferId], references: [id])
+  counterOffers BarterOffer[] @relation("CounterOffers")
+
+  // Fulfillment tracking
+  fulfilledByInitiator Boolean @default(false)
+  fulfilledByRecipient Boolean @default(false)
+
+  // Dispute handling
+  disputeReason     String?
+  disputeResolvedBy String?
+  disputeResolution String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([initiatorVendorId])
+  @@index([recipientVendorId])
+  @@index([status])
+}
+
+enum BarterStatus {
+  DRAFT
+  SENT
+  COUNTERED
+  ACCEPTED
+  REJECTED
+  CANCELLED
+  IN_PROGRESS
+  COMPLETED
+  DISPUTED
+}
+
+enum CashGapDirection {
+  INITIATOR_PAYS
+  RECIPIENT_PAYS
+}
+
+model BarterItem {
+  id        String  @id @default(cuid())
+  offerId   String
+  offer     BarterOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int     @default(1)
+  valueCents Int    // Snapshot of product price at offer time
+
+  // true = offered by initiator, false = requested from recipient
+  isOffered Boolean
+
+  @@index([offerId])
+  @@index([productId])
+}
+
+// ============================================
+// PARTNER CONTENT MANAGEMENT
+// ============================================
+
+model PartnerAnnouncement {
+  id          String    @id @default(cuid())
+  title       String
+  content     String
+  priority    Int       @default(0)  // Higher = more important, shown first
+  isActive    Boolean   @default(true)
+  createdById String    // Admin who created it
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  expiresAt   DateTime? // Optional expiration date
+
+  @@index([isActive])
+  @@index([createdAt])
+}
+
+model PartnerDocument {
+  id            String             @id @default(cuid())
+  title         String
+  description   String?
+  category      PartnerDocCategory @default(GENERAL)
+  fileName      String             // Original file name
+  filePath      String             // Server path /uploads/partner-docs/...
+  fileSize      Int                // Size in bytes
+  mimeType      String             // application/pdf, etc.
+  downloadCount Int                @default(0)
+  isActive      Boolean            @default(true)
+  createdById   String             // Admin who uploaded it
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([isActive])
+  @@index([category])
+  @@index([createdAt])
+}
+
+enum PartnerDocCategory {
+  GENERAL
+  REPORT
+  GUIDE
+  CONTRACT
+  FINANCIAL
+  POLICY
+}
